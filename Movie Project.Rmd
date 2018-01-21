@@ -1,0 +1,166 @@
+Movie Project: Logistic Regression and Random Forest
+David Kan
+January 20, 2018
+
+In this project, we will scrape data about the 100 highest grossing movies in 2016 from boxofficemojo.com.  Next we will scrape IMDB ratings and reviews for each movie.  We will then discretize box office gross into 5 equal categories and randomly split our data into 70/30 training/testing split.  Next we will use Logistic Regression and Random Forest to predict categories as well as calculate the importance of our factors.
+
+Setup
+```{r setup, warnings=FALSE}
+library(rvest)
+library(stringr)
+library(tidyr)
+library(curl)
+library(nnet)
+library(tidyverse)
+library(psych)
+library(ggplot2)
+library(scales)
+library(caret)
+require(randomForest)
+```
+
+Scrape boxofficemojo.com
+```{r mojo}
+year <- 2016
+movie_search_link <- paste("http://www.boxofficemojo.com/yearly/chart/?yr=", toString(year), sep = "")
+mojoWebpage <- read_html(curl(movie_search_link, handle = new_handle("useragent" = "Mozilla/5.0")))
+
+title <- html_nodes(mojoWebpage, "td:nth-child(2) a") %>% html_text()
+title = title[4:103]
+for (i in 1:length(title)){
+  if (grepl("\\(", title[i])){
+    title[i] = substr(title[i], 1, regexpr('\\(', title[i])[1]-2)
+  }
+}
+
+studio <- html_nodes(mojoWebpage, "td:nth-child(3) a") %>% html_text()
+studio = studio[5:104]
+
+gross <- html_nodes(mojoWebpage, "td:nth-child(4)") %>% html_text()
+gross = gross[3:102]
+for (i in 1:length(gross)){
+  grossString <- str_replace_all(gross[i], ",", "")
+  gross[i] = as.numeric(substring(grossString, 2))
+}
+
+opening <- html_nodes(mojoWebpage, "td:nth-child(6)") %>% html_text()
+opening = opening[2:101]
+for (i in 1:length(opening)){
+  openingString <- str_replace_all(opening[i], ",", "")
+  opening[i] = as.numeric(substring(openingString, 2))
+}
+
+theaters <- html_nodes(mojoWebpage, "td:nth-child(7)") %>% html_text()
+theaters = theaters[2:101]
+for (i in 1:length(theaters)){
+  theatersString <- str_replace_all(theaters[i], ",", "")
+  theaters[i] = as.numeric(theatersString)
+}
+
+month <- html_nodes(mojoWebpage, "td:nth-child(8)") %>% html_text()
+for (i in 1:length(month)){
+  month[i] = as.numeric(substr(month[i], 1, regexpr('/', month[i])[1]-1))
+}
+
+movieDf <- data.frame(title, studio, gross, opening, theaters, month)
+movieDf$opening <- as.numeric(as.character(movieDf$opening))
+movieDf$theaters <- as.numeric(as.character(movieDf$theaters))
+```
+
+Scrape IMDB
+```{r IMDB}
+movieDf["rating"] <- NA
+movieDf["reviews"] <- NA
+for (value in 1:nrow(movieDf['title'])) {
+  movie_search_string <- movieDf['title'][value,]
+  movie_search_string <- str_replace_all(movie_search_string," ","+")
+  movie_search_string <- str_replace_all(movie_search_string,":","%3A")
+  movie_search_string <- str_replace_all(movie_search_string,"&","%26")
+  movie_search_string <- str_replace_all(movie_search_string,"#","%23")
+  movie_search_string <- str_replace_all(movie_search_string,",","%2C")
+
+  movie_search_link <- paste("http://www.imdb.com/find?q=", movie_search_string, sep = "")
+  movie_search_link <- paste(movie_search_link, "&s=tt", sep = "")
+  
+  webpage <- read_html(curl(movie_search_link, handle = new_handle("useragent" = "Mozilla/5.0")))
+  movie_code <- substr(html_nodes(webpage, ".result_text a")[1] %>% html_attr('href'), 1, 16)
+
+  movie_page_link <- paste("http://www.imdb.com", movie_code, sep = "")
+  webpage <- read_html(curl(movie_page_link, handle = new_handle("useragent" = "Mozilla/5.0")))
+  
+  rating <- as.numeric(html_text(html_nodes(webpage, "[itemprop=ratingValue]"))[1])
+  reviews <- as.numeric(gsub(",", "", html_text(html_nodes(webpage, "[itemprop=ratingCount]"))[1]))
+
+  movieDf['rating'][value,] = rating
+  movieDf['reviews'][value,] = reviews
+}
+
+movieDf["grossTiers"] <- NA
+for (i in 1:nrow(movieDf['gross'])) {
+    if (i > 81){
+      movieDf['grossTiers'][i,] = 1
+    }else if(i > 61){
+      movieDf['grossTiers'][i,] = 2
+    }else if(i > 41){
+      movieDf['grossTiers'][i,] = 3
+    }else if(i > 21){
+      movieDf['grossTiers'][i,] = 4
+    }else{
+      movieDf['grossTiers'][i,] = 5
+    }
+} 
+
+head(movieDf)
+```
+
+Randomly split data into 70/30 training and testing set.
+```{r split}
+set.seed(6)
+movieDfCut <- movieDf[c('studio', 'opening', 'month', 'theaters', 'rating', 'reviews', 'grossTiers')]
+samp <- sample(nrow(movieDfCut), 0.7 * nrow(movieDfCut))
+train <- movieDfCut[samp, ]
+test <- movieDfCut[-samp, ]
+```
+Run Logistic Regression
+```{r log}
+logRegModel <- multinom(grossTiers ~ ., data = train, MaxNWts =10000000)
+logRegPred <- predict(logRegModel, newdata = test)
+LogRegCM <- confusionMatrix(logRegPred, test$grossTiers)
+
+# function from https://stackoverflow.com/questions/46063234/how-to-produce-a-confusion-matrix-and-find-the-misclassification-rate-of-the-na%C3%AF
+ggplotConfusionMatrix <- function(m){
+  mytitle <- paste("Accuracy", percent_format()(m$overall[1]))
+  p <-
+    ggplot(data = as.data.frame(m$table) ,
+           aes(x = Reference, y = Prediction)) +
+    geom_tile(aes(fill = log(Freq)), colour = "white") +
+    scale_fill_gradient(low = "white", high = "steelblue") +
+    geom_text(aes(x = Reference, y = Prediction, label = Freq)) +
+    theme(legend.position = "none") +
+    ggtitle(mytitle)
+  return(p)
+}
+
+ggplotConfusionMatrix(LogRegCM)
+```
+Run Random Forest
+```{r forest}
+forestModel <- randomForest(factor(grossTiers) ~ ., data = train)
+forestPred <- predict(forestModel, newdata = test)
+RandForCM <- confusionMatrix(forestPred, test$grossTiers)
+
+ggplotConfusionMatrix(RandForCM)
+```
+Find factor importance
+```{r importance}
+movie.rf <- randomForest(grossTiers ~ ., data = movieDfCut, importance=TRUE)
+imp <- importance(movie.rf)
+Factors <- row.names(imp)
+Importance <- imp[,"%IncMSE"]
+impDf <- data.frame(Factors, Importance)
+impPlot <-ggplot(impDf, aes(Factors, Importance))
+impPlot +geom_col()
+```
+
+Conclusion:
+Because our movies were seperated into 5 equal groups based on gross, a random guess would lead to 20% accuracy.  Both of our models performed better than this with logistic regression at 40% accuracy and random forest at 56.7% accuracy.  Our most predictive attribute based on importance is opening sales followed by the number of theaters, and number of IMDB reviews.
