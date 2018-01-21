@@ -5,7 +5,7 @@ January 20, 2018
 In this project, we will scrape data about the 100 highest grossing movies in 2016 from boxofficemojo.com.  Next we will scrape IMDB ratings and reviews for each movie.  We will then discretize box office gross into 5 equal categories and randomly split our data into 70/30 training/testing split.  Next we will use Logistic Regression and Random Forest to predict categories as well as calculate the importance of our factors.
 
 Setup
-```{r setup, warnings=FALSE}
+```{r setup}
 library(rvest)
 library(stringr)
 library(tidyr)
@@ -63,8 +63,8 @@ for (i in 1:length(month)){
 }
 
 movieDf <- data.frame(title, studio, gross, opening, theaters, month)
-movieDf$opening <- as.numeric(as.character(movieDf$opening))
-movieDf$theaters <- as.numeric(as.character(movieDf$theaters))
+movieDf$opening <- as.numeric(as.character(movieDfCut$opening))
+movieDf$theaters <- as.numeric(as.character(movieDfCut$theaters))
 ```
 
 Scrape IMDB
@@ -161,6 +161,5 @@ impDf <- data.frame(Factors, Importance)
 impPlot <-ggplot(impDf, aes(Factors, Importance))
 impPlot +geom_col()
 ```
-
 Conclusion:
 Because our movies were seperated into 5 equal groups based on gross, a random guess would lead to 20% accuracy.  Both of our models performed better than this with logistic regression at 40% accuracy and random forest at 56.7% accuracy.  Our most predictive attribute based on importance is opening sales followed by the number of theaters, and number of IMDB reviews.
